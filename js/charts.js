@@ -516,11 +516,11 @@
 
     var colorFull = opts.colorFull || t.sales;
     var colorDiscount = opts.colorDiscount || t.discount;
-    var maxH = opts.maxHeight || 300;
+    var maxH = opts.maxHeight || 360;
     var maxCount = d3.max(weeks, function (w) { return w.count; }) || 1;
 
     // столбец шириной в один атом: размер подбираем по высоте, промежутки узкие
-    var size = Math.max(5, Math.min(14, Math.floor(maxH / maxCount) - ATOM.gap));
+    var size = Math.max(6, Math.min(16, Math.floor(maxH / maxCount) - ATOM.gap));
     var step = size + ATOM.gap;
     var colGap = Math.max(3, Math.round(size * 0.45));
     var colStep = size + colGap;
