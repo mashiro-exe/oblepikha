@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ЖК «Облепиха» — дашборд продаж</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- Сообщение, если Vue не загрузился (нет доступа к CDN) -->
+<div id="boot-error" class="load-error" style="display:none">
+  <h2 style="margin-top:0">Не удалось загрузить Vue</h2>
+  <p>Библиотека Vue 3 подключается с CDN, а он сейчас недоступен. Варианты:</p>
+  <ul>
+    <li>проверить интернет-соединение и обновить страницу;</li>
+    <li>скачать <code>vue.global.prod.js</code> в папку <code>vendor/</code> и заменить
+      ссылку на CDN в <code>index.html</code> на <code>vendor/vue.global.prod.js</code>.</li>
+  </ul>
+</div>
+
+<div id="app" v-cloak>
+
+  <header class="app-header">
+    <div>
+      <h1>ЖК «Облепиха» — продажи квартир</h1>
+      <p class="sub">
+        Новосибирск, ул. Сиреневая, 1 · {{ fmtInt(inventory.length) }}
+        {{ plural(inventory.length, 'квартира', 'квартиры', 'квартир') }} в выборке ·
+        сделки с {{ fmtDateFull(dateMin) }} по {{ fmtDateFull(dateMax) }}
+      </p>
+    </div>
+    <button class="theme-toggle" type="button" @click="toggleTheme">
+      <span aria-hidden="true">{{ theme === 'dark' ? '☾' : '☀' }}</span>
+      {{ theme === 'dark' ? 'Тёмная тема' : 'Светлая тема' }}
+    </button>
+  </header>
+
+
+  <!-- ---------- фильтры: одна строка над всем содержимым ---------- -->
+  <section class="filters">
+    <div class="filter-group">
+      <span class="label">Период сделки</span>
+      <div class="chips">
+        <button class="chip" type="button"
+                :class="{ 'is-active': datePreset === 'all' }"
+                @click="setPreset('all')">Весь период</button>
+        <button v-for="p in presets" :key="p.key" class="chip" type="button"
+                :class="{ 'is-active': datePreset === p.key }"
+                @click="setPreset(p.key)">{{ p.label }}</button>
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="label">Свой интервал</span>
+      <div class="date-inputs">
+        <input type="date" v-model="dateFrom" :min="dateMin" :max="dateMax" @change="onDateInput">
+        <span>—</span>
+        <input type="date" v-model="dateTo" :min="dateMin" :max="dateMax" @change="onDateInput">
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="label">Корпус</span>
+      <div class="chips">
+        <button v-for="b in allBuildings" :key="b" class="chip" type="button"
+                :class="{ 'is-active': selBuildings.includes(b) }"
+                @click="toggleFilter('building', b)">
+          <span v-if="selBuildings.includes(b)" class="check">✓</span>{{ b }}
+        </button>
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="label">Комнат</span>
+      <div class="chips">
+        <button v-for="n in allRooms" :key="n" class="chip" type="button"
+                :class="{ 'is-active': selRooms.includes(n) }"
+                @click="toggleFilter('rooms', n)">{{ n }}</button>
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="label">Вид из окон</span>
+      <div class="chips">
+        <button v-for="v in allViews" :key="v" class="chip" type="button"
+                :class="{ 'is-active': selViews.includes(v) }"
+                @click="toggleFilter('view', v)">{{ v }}</button>
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="label">Менеджер</span>
+      <div class="chips">
+        <button v-for="m in allManagers" :key="m" class="chip" type="button"
+                :class="{ 'is-active': selManagers.includes(m) }"
+                @click="toggleFilter('manager', m)">{{ m }}</button>
+      </div>
+    </div>
+
+    <div class="spacer"></div>
+    <button v-if="isFiltered" class="reset-btn" type="button" @click="resetFilters">Сбросить фильтры</button>
+  </section>
+
+  <!-- ---------- KPI ---------- -->
+  <section class="kpi-row">
+    <div class="kpi hero">
+      <div class="label">Выручка по сделкам</div>
+      <div class="value">{{ fmtMoneyShort(kpi.revenue) }}</div>
+      <div class="note">{{ fmtMoney(kpi.revenue) }}</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Сделок</div>
+      <div class="value">{{ fmtInt(kpi.deals) }}</div>
+      <div class="note">{{ fmtPct(kpi.soldShare) }} пула · в экспозиции {{ fmtInt(kpi.remaining) }}</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Средний чек</div>
+      <div class="value">{{ fmtMoneyShort(kpi.avgDeal) }}</div>
+      <div class="note">{{ fmtMoneyShort(kpi.avgPricePerM2) }} за м²</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Медиана срока сделки</div>
+      <div class="value">{{ kpi.medianDays == null ? '—' : fmtInt(kpi.medianDays) }}</div>
+      <div class="note">{{ plural(kpi.medianDays || 0, 'день', 'дня', 'дней') }} от обращения · в среднем {{ kpi.avgDays == null ? '—' : fmtInt(kpi.avgDays) }}</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Скидки</div>
+      <div class="value">{{ fmtMoneyShort(kpi.discountSum) }}</div>
+      <div class="note">{{ fmtPct(kpi.discountShare) }} сделок · {{ fmtPct(kpi.discountRate, 1) }} от прайса</div>
+    </div>
+  </section>
+
+  <div v-if="!deals.length" class="card empty">
+    Под выбранные фильтры не попала ни одна сделка. Сбросьте часть условий.
+  </div>
+
+  <div class="grid" v-else>
+
+    <!-- ---------- темп продаж ---------- -->
+    <section class="card half">
+      <div class="card-head">
+        <div>
+          <h2>Темп продаж по неделям</h2>
+        </div>
+      </div>
+
+      <div class="pace">
+        <div class="pace-figures">
+          <div class="mini">
+            <div class="label">Сделок в неделю</div>
+            <div class="value">{{ fmt1(pulse.rateNow) }}</div>
+            <div class="note">было {{ fmt1(pulse.ratePrev) }} · {{ signPct(pulse.dealsDelta) }}</div>
+          </div>
+          <div class="mini">
+            <div class="label">Выручка в неделю</div>
+            <div class="value">{{ fmtMoneyShort(pulse.revenueNow) }}</div>
+            <div class="note">чек {{ fmtMoneyShort(pulse.checkNow) }} · {{ signPct(pulse.checkDelta) }}</div>
+          </div>
+          <div class="mini">
+            <div class="label">В экспозиции</div>
+            <div class="value">{{ fmtInt(pulse.remaining) }}</div>
+            <div class="note">на {{ fmtMoneyShort(pulse.remainingValue) }} по прайсу</div>
+          </div>
+          <div class="mini">
+            <div class="label">Хватит примерно на</div>
+            <div class="value">{{ pulse.weeksLeft == null ? '—' : fmtInt(pulse.weeksLeft) }} <span class="unit">нед.</span></div>
+            <div class="note">при нынешнем темпе</div>
+          </div>
+        </div>
+
+        <div class="pace-chart">
+          <div class="chart" id="chart-weeks"></div>
+          <div class="legend">
+            <span class="item"><span class="swatch atom" style="background:var(--c-sales)"></span>по прайсу</span>
+            <span class="item"><span class="swatch atom" style="background:var(--c-discount)"></span>со скидкой</span>
+          </div>
+          <p class="chart-note">Последняя неделя выгрузки неполная — выделена подложкой и в расчёт темпа не входит.</p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ---------- визуальный атом: пул квартир ---------- -->
+    <section class="card half topic-sales">
+      <div class="card-head">
+        <div>
+          <h2>Пул квартир: каждый квадратик — одна квартира</h2>
+        </div>
+      </div>
+
+      <div>
+        <div class="chart" id="chart-pool"></div>
+        <div class="legend">
+          <span class="item"><span class="swatch atom" style="background:var(--c-sales)"></span>продана — {{ fmtInt(kpi.deals) }}</span>
+          <span class="item"><span class="swatch atom" style="background:var(--c-rest)"></span>в экспозиции — {{ fmtInt(kpi.remaining) }}</span>
+          <span class="item">всего {{ fmtInt(kpi.inventory) }} · реализация {{ fmtPct(kpi.soldShare) }}</span>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ---------- 2. менеджеры ---------- -->
+    <section class="card topic-manager">
+      <div class="card-head">
+        <div>
+          <h2>Менеджеры: количество сделок и выручка</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': !isTable('man') }" @click="toggleTable('man')">График</button>
+            <button type="button" :class="{ 'is-active': isTable('man') }" @click="toggleTable('man')">Таблица</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="!isTable('man')" class="dual">
+        <div>
+          <div class="panel-title">Сделок, шт.</div>
+          <div class="chart" id="chart-man-deals"></div>
+        </div>
+        <div>
+          <div class="panel-title">Выручка, ₽</div>
+          <div class="chart" id="chart-man-revenue"></div>
+        </div>
+      </div>
+
+      <div v-if="isTable('man')" class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Менеджер</th><th>Сделок</th><th>Выручка</th><th>Средний чек</th>
+              <th>Цена за м²</th><th>Продано, м²</th><th>Медиана дней</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="m in mansByRevenue" :key="m.key">
+              <td>{{ m.label }}</td>
+              <td>{{ fmtInt(m.deals) }}</td>
+              <td>{{ fmtMoney(m.revenue) }}</td>
+              <td>{{ fmtMoneyShort(m.avgDeal) }}</td>
+              <td>{{ fmtMoneyShort(m.avgPricePerM2) }}</td>
+              <td>{{ fmtArea(m.area) }}</td>
+              <td>{{ m.medianDays == null ? '—' : fmtInt(m.medianDays) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- 3. скидки ---------- -->
+    <section class="card topic-discount">
+      <div class="card-head">
+        <div>
+          <h2>Менеджеры и скидки</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': !isTable('disc') }" @click="toggleTable('disc')">График</button>
+            <button type="button" :class="{ 'is-active': isTable('disc') }" @click="toggleTable('disc')">Таблица</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="!isTable('disc')">
+        <div class="dual">
+          <div>
+            <div class="panel-title">Сделки: со скидкой и по прайсу</div>
+            <div class="chart" id="chart-man-discount"></div>
+            <div class="legend">
+              <span class="item"><span class="swatch atom" style="background:var(--c-discount)"></span>продана со скидкой</span>
+              <span class="item"><span class="swatch atom" style="background:var(--c-sales)"></span>продана по прайсу</span>
+              <span class="item">квадратик — одна квартира</span>
+            </div>
+          </div>
+          <div>
+            <div class="panel-title">Сумма предоставленных скидок, ₽</div>
+            <div class="chart" id="chart-man-discount-sum"></div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="isTable('disc')" class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th>Менеджер</th><th>Сделок</th><th>Со скидкой</th><th>Доля со скидкой</th>
+              <th>Сумма скидок</th><th>Средняя скидка</th><th>Дисконт от прайса</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="m in mansByDiscount" :key="m.key">
+              <td>{{ m.label }}</td>
+              <td>{{ fmtInt(m.deals) }}</td>
+              <td>{{ fmtInt(m.dealsWithDiscount) }}</td>
+              <td>{{ fmtPct(m.discountShare) }}</td>
+              <td>{{ fmtMoney(m.discountSum) }}</td>
+              <td>{{ m.avgDiscount ? fmtMoneyShort(m.avgDiscount) : '—' }}</td>
+              <td>{{ fmtPct(m.discountRate, 1) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+
+    <!-- ---------- схема комплекса ---------- -->
+    <section class="card half">
+      <div class="card-head">
+        <div>
+          <h2>Схема комплекса</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button v-for="m in planMetrics" :key="m.key" type="button"
+                    :class="{ 'is-active': planMetric === m.key }"
+                    @click="planMetric = m.key">{{ m.label }}</button>
+          </div>
+          <button v-if="selSections.length" class="reset-btn" type="button" @click="clearSections">Снять выбор</button>
+        </div>
+      </div>
+      <div class="chart" id="chart-plan"></div>
+      <div id="plan-legend" style="margin-top:10px"></div>
+      <p class="chart-note">
+        <template v-if="selSections.length">Выбрано: {{ selSections.join(', ') }} — фильтр действует на весь дашборд.</template>
+        <template v-else>Клик по корпусу или секции фильтрует весь дашборд.</template>
+      </p>
+    </section>
+
+    <!-- ---------- 6. матрица корпус × этаж ---------- -->
+    <section class="card half">
+      <div class="card-head">
+        <div>
+          <h2>Реализация по этажам</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': !isTable('matrix') }" @click="toggleTable('matrix')">Карта</button>
+            <button type="button" :class="{ 'is-active': isTable('matrix') }" @click="toggleTable('matrix')">Таблица</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="!isTable('matrix')">
+        <div class="chart" id="chart-matrix"></div>
+        <div id="matrix-legend" style="margin-top:10px"></div>
+      </div>
+
+      <div v-if="isTable('matrix')" class="table-wrap" style="max-height:420px;overflow-y:auto">
+        <table class="data">
+          <thead>
+            <tr><th>Корпус</th><th>Этаж</th><th>Квартир</th><th>Продано</th><th>Доля</th><th>Выручка</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in matrix.cells.filter(c => !c.empty)" :key="c.building + '-' + c.floor">
+              <td>{{ c.building }}</td>
+              <td>{{ c.floor }}</td>
+              <td>{{ fmtInt(c.total) }}</td>
+              <td>{{ fmtInt(c.deals) }}</td>
+              <td>{{ fmtPct(c.share) }}</td>
+              <td>{{ fmtMoneyShort(c.revenue) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- 4. корпуса ---------- -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Продажи по корпусам</h2>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr>
+              <th class="sortable" @click="sortBy('label')">Корпус <span class="arrow" v-if="sortKey === 'label'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('total')">Квартир <span class="arrow" v-if="sortKey === 'total'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('deals')">Продано <span class="arrow" v-if="sortKey === 'deals'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('soldShare')">Реализация <span class="arrow" v-if="sortKey === 'soldShare'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('revenue')">Выручка <span class="arrow" v-if="sortKey === 'revenue'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('soldArea')">Продано, м² <span class="arrow" v-if="sortKey === 'soldArea'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('avgPricePerM2')">Цена за м² <span class="arrow" v-if="sortKey === 'avgPricePerM2'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('avgDeal')">Средний чек <span class="arrow" v-if="sortKey === 'avgDeal'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('discountSum')">Скидки <span class="arrow" v-if="sortKey === 'discountSum'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+              <th class="sortable" @click="sortBy('medianDays')">Медиана дней <span class="arrow" v-if="sortKey === 'medianDays'">{{ sortDir === 'asc' ? '▲' : '▼' }}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="b in buildingsSorted" :key="b.key">
+              <td>{{ b.label }}</td>
+              <td>{{ fmtInt(b.total) }}</td>
+              <td>{{ fmtInt(b.deals) }}</td>
+              <td>
+                <span class="minibar"><i :style="{ width: (b.soldShare * 100) + '%' }"></i></span>{{ fmtPct(b.soldShare) }}
+              </td>
+              <td>{{ fmtMoney(b.revenue) }}</td>
+              <td>{{ fmtArea(b.soldArea) }}</td>
+              <td>{{ fmtMoneyShort(b.avgPricePerM2) }}</td>
+              <td>{{ fmtMoneyShort(b.avgDeal) }}</td>
+              <td>{{ b.discountSum ? fmtMoney(b.discountSum) : '—' }}</td>
+              <td>{{ b.medianDays == null ? '—' : fmtInt(b.medianDays) }}</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>Итого</td>
+              <td>{{ fmtInt(buildingsTotal.total) }}</td>
+              <td>{{ fmtInt(buildingsTotal.deals) }}</td>
+              <td>{{ fmtPct(buildingsTotal.soldShare) }}</td>
+              <td>{{ fmtMoney(buildingsTotal.revenue) }}</td>
+              <td>{{ fmtArea(buildingsTotal.soldArea) }}</td>
+              <td>{{ fmtMoneyShort(buildingsTotal.avgPricePerM2) }}</td>
+              <td>{{ fmtMoneyShort(buildingsTotal.avgDeal) }}</td>
+              <td>{{ fmtMoney(buildingsTotal.discountSum) }}</td>
+              <td>{{ buildingsTotal.medianDays == null ? '—' : fmtInt(buildingsTotal.medianDays) }}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+
+    <!-- ---------- вопрос 2: кому премия, с кем разговор ---------- -->
+    <section class="card answer topic-manager">
+      <div class="card-head">
+        <div>
+          <h2>Кому премия, а с кем поговорить</h2>
+        </div>
+      </div>
+
+      <p class="verdict">{{ managerAnswer.headline }}</p>
+
+      <div class="table-wrap">
+        <table class="data scorecard">
+          <thead>
+            <tr>
+              <th>Менеджер</th><th>Сделок</th><th>Выручка</th><th>Доля выручки</th>
+              <th>Средний чек</th><th>Цена м² к команде</th><th>Сделок со скидкой</th>
+              <th>Дисконт от прайса</th><th>Медиана дней</th><th class="verdict-col">Вывод</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="m in managerAnswer.rows" :key="m.key">
+              <td>{{ m.label }}</td>
+              <td>{{ fmtInt(m.deals) }}</td>
+              <td>{{ fmtMoneyShort(m.revenue) }}</td>
+              <td>{{ fmtPct(m.revenueShare) }}</td>
+              <td>{{ fmtMoneyShort(m.avgDeal) }}</td>
+              <td :class="{ 'neg': m.pricePremium <= -0.1, 'pos': m.pricePremium >= 0.05 }">{{ signPct(m.pricePremium) }}</td>
+              <td>{{ fmtPct(m.discountShare) }}</td>
+              <td :class="{ 'neg': m.vsTeamDiscount >= 0.5 }">{{ fmtPct(m.discountRate, 1) }}</td>
+              <td>{{ m.medianDays == null ? '—' : fmtInt(m.medianDays) }}</td>
+              <td class="verdict-col">
+                <span v-for="(tag, i) in m.tags" :key="i" class="badge" :class="tag.kind">{{ tag.text }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- вопрос 3: какие квартиры продаются ---------- -->
+    <section class="card answer">
+      <div class="card-head">
+        <div>
+          <h2>Квартиры с какими признаками продаются, а с какими стоят</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button v-for="f in featureList" :key="f.key" type="button"
+                    :class="{ 'is-active': featureKey === f.key }"
+                    @click="featureKey = f.key">{{ f.label }}</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="verdict">{{ featureAnswer.headline }}</p>
+      <ul class="answer-list">
+        <li v-for="(text, i) in featureAnswer.lines" :key="i">{{ text }}</li>
+      </ul>
+
+      <div class="dual">
+        <div>
+          <div class="panel-title">Реализация по признаку «{{ featureBreak.label }}»</div>
+          <div class="chart" id="chart-feature"></div>
+        </div>
+        <div>
+          <div class="panel-title">Сильнее всего опережают среднее</div>
+          <ul class="feature-list">
+            <li v-for="r in featureAnswer.best" :key="r.feature + r.key">
+              <span class="fl-name">{{ r.label }}</span>
+              <span class="fl-meta">{{ r.featureLabel.toLowerCase() }} · пул {{ fmtInt(r.total) }}</span>
+              <span class="fl-value pos">{{ fmtPct(r.share) }} ({{ signPct(r.delta) }})</span>
+            </li>
+          </ul>
+          <div class="panel-title">Сильнее всего отстают</div>
+          <ul class="feature-list">
+            <li v-for="r in featureAnswer.worst" :key="r.feature + r.key">
+              <span class="fl-name">{{ r.label }}</span>
+              <span class="fl-meta">{{ r.featureLabel.toLowerCase() }} · в экспозиции {{ fmtInt(r.remaining) }}</span>
+              <span class="fl-value neg">{{ fmtPct(r.share) }} ({{ signPct(r.delta) }})</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="table-wrap" style="margin-top:14px">
+        <table class="data">
+          <thead>
+            <tr><th>{{ featureBreak.label }}</th><th>Квартир</th><th>Продано</th><th>Реализация</th>
+              <th>К среднему</th><th>Медиана дней</th><th>Прайс за м²</th><th>Со скидкой</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in featureBreak.rows" :key="r.key">
+              <td>{{ r.label }}</td>
+              <td>{{ fmtInt(r.total) }}</td>
+              <td>{{ fmtInt(r.deals) }}</td>
+              <td>{{ fmtPct(r.share) }}</td>
+              <td :class="{ 'pos': r.delta > 0.03, 'neg': r.delta < -0.03 }">{{ signPct(r.delta) }}</td>
+              <td>{{ r.medianDays == null ? '—' : fmtInt(r.medianDays) }}</td>
+              <td>{{ r.listPricePerM2 ? fmtMoneyShort(r.listPricePerM2) : '—' }}</td>
+              <td>{{ r.deals ? fmtPct(r.discountShare) : '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- 5. вид из окон ---------- -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Продажи в зависимости от вида из окон</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': viewMetric === 'units' }" @click="viewMetric = 'units'">Квадратики</button>
+            <button type="button" :class="{ 'is-active': viewMetric === 'deals' }" @click="viewMetric = 'deals'">Полосы</button>
+            <button type="button" :class="{ 'is-active': viewMetric === 'price' }" @click="viewMetric = 'price'">Цена за м²</button>
+          </div>
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': !isTable('view') }" @click="toggleTable('view')">График</button>
+            <button type="button" :class="{ 'is-active': isTable('view') }" @click="toggleTable('view')">Таблица</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="!isTable('view')">
+        <div class="chart" id="chart-views"></div>
+        <div class="legend" v-if="viewMetric !== 'price'">
+          <span class="item"><span class="swatch atom" style="background:var(--c-sales)"></span>продана</span>
+          <span class="item"><span class="swatch atom" style="background:var(--c-rest)"></span>в экспозиции</span>
+          <span class="item" v-if="viewMetric === 'units'">квадратик — одна квартира</span>
+        </div>
+      </div>
+
+      <div v-if="isTable('view')" class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr><th>Вид</th><th>Квартир</th><th>Продано</th><th>Реализация</th><th>Выручка</th><th>Цена за м²</th><th>Медиана дней</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="v in viewRows" :key="v.key">
+              <td>{{ v.label }}</td>
+              <td>{{ fmtInt(v.total) }}</td>
+              <td>{{ fmtInt(v.deals) }}</td>
+              <td>{{ fmtPct(v.soldShare) }}</td>
+              <td>{{ fmtMoneyShort(v.revenue) }}</td>
+              <td>{{ v.avgPricePerM2 ? fmtMoneyShort(v.avgPricePerM2) : '—' }}</td>
+              <td>{{ v.medianDays == null ? '—' : fmtInt(v.medianDays) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- 7. комнатность ---------- -->
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Структура спроса по комнатности</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': roomsMode === 'units' }" @click="roomsMode = 'units'">Квадратики</button>
+            <button type="button" :class="{ 'is-active': roomsMode === 'bars' }" @click="roomsMode = 'bars'">Столбцы</button>
+          </div>
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': !isTable('rooms') }" @click="toggleTable('rooms')">График</button>
+            <button type="button" :class="{ 'is-active': isTable('rooms') }" @click="toggleTable('rooms')">Таблица</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="!isTable('rooms')">
+        <div class="chart" id="chart-rooms"></div>
+        <div class="legend">
+          <span class="item"><span class="swatch atom" style="background:var(--c-sales)"></span>продана</span>
+          <span class="item"><span class="swatch atom" style="background:var(--c-rest)"></span>в экспозиции</span>
+        </div>
+      </div>
+
+      <div v-if="isTable('rooms')" class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr><th>Тип</th><th>Квартир</th><th>Продано</th><th>Реализация</th><th>Ср. площадь</th><th>Цена за м²</th><th>Выручка</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in roomRows" :key="r.key">
+              <td>{{ r.label }}</td>
+              <td>{{ fmtInt(r.total) }}</td>
+              <td>{{ fmtInt(r.deals) }}</td>
+              <td>{{ fmtPct(r.soldShare) }}</td>
+              <td>{{ fmtArea(r.avgArea) }}</td>
+              <td>{{ r.avgPricePerM2 ? fmtMoneyShort(r.avgPricePerM2) : '—' }}</td>
+              <td>{{ fmtMoneyShort(r.revenue) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- 8. скорость сделки ---------- -->
+    <section class="card half topic-sales">
+      <div class="card-head">
+        <div>
+          <h2>Скорость сделки</h2>
+        </div>
+        <div class="card-tools">
+          <div class="seg">
+            <button type="button" :class="{ 'is-active': !isTable('days') }" @click="toggleTable('days')">График</button>
+            <button type="button" :class="{ 'is-active': isTable('days') }" @click="toggleTable('days')">Таблица</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-show="!isTable('days')" class="chart" id="chart-days"></div>
+
+      <div v-if="isTable('days')" class="table-wrap">
+        <table class="data">
+          <thead>
+            <tr><th>Срок</th><th>Сделок</th><th>Доля</th><th>Выручка</th><th>Со скидкой</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="d in daysRows" :key="d.key">
+              <td>{{ d.label }}</td>
+              <td>{{ fmtInt(d.deals) }}</td>
+              <td>{{ fmtPct(d.share) }}</td>
+              <td>{{ fmtMoneyShort(d.revenue) }}</td>
+              <td>{{ fmtPct(d.discountShare) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------- 9. наблюдения ---------- -->
+    <section class="card half">
+      <div class="card-head">
+        <div>
+          <h2>Что видно в данных</h2>
+        </div>
+      </div>
+      <ul class="insights">
+        <li v-for="(text, i) in insights" :key="i">{{ text }}</li>
+      </ul>
+    </section>
+
+  </div>
+
+  <footer class="footer">
+    <span>ЖК «Облепиха», Новосибирск, ул. Сиреневая, 1. Источник: выгрузка отдела продаж, {{ fmtInt(totalCount) }} квартир, сделки июнь–август 2022.</span>
+    <span>Доли реализации считаются от пула, отобранного фильтрами «корпус / комнат / вид».</span>
+  </footer>
+</div>
+
+<div id="tooltip"></div>
+
+<!-- D3 — локальная копия, работает без интернета -->
+<script src="vendor/d3.v7.min.js"></script>
+<!-- Vue 3 — с CDN; при отсутствии сети покажется подсказка выше -->
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+  if (!window.Vue) {
+    document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js"><\/script>');
+  }
+</script>
+
+<script src="js/data.js"></script>
+<script src="js/stats.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
